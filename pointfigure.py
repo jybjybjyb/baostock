@@ -2,12 +2,12 @@ import baostock as bs
 import pandas as pd
 import pandas_ta as ta
 import mplfinance as mpf
-import mplfinance._utils as mpf_utils  # 导入底层工具模块准备打补丁
+import mplfinance._utils as mpf_utils
+from datetime import datetime, timedelta
 
 # ==========================================
-# 【底层系统级 Bug 修复：猴子补丁 Monkey Patch】
-# 强制拦截 mplfinance 的 _calculate_atr 函数，将传入的 Pandas Series
-# 转换为 numpy 数组 (.values)，恢复其数字索引 [i] 的能力。
+# 【底层系统级 Bug 修复：猴子补丁】
+# 解决 mplfinance 在 Pandas 2.0+ 环境下画 P&F 图的崩溃问题
 # ==========================================
 original_calculate_atr = mpf_utils._calculate_atr
 
@@ -17,19 +17,49 @@ def patched_calculate_atr(n, highs, lows, closes):
 
 
 mpf_utils._calculate_atr = patched_calculate_atr
-# ==========================================
 
 # ==========================================
 # 【量化系统核心参数控制台】
 # ==========================================
 ATR_PERIOD = 14        # ATR 计算周期
-BOX_MULTIPLIER = 0.5   # 箱体大小乘数 (Box Size)
+BOX_MULTIPLIER = 0.55   # 箱体大小乘数 (Box Size)
 REVERSAL_AMOUNT = 3    # 反转系数
 # ==========================================
 
+# ==========================================
+# 模块一：自动化时间推算引擎
+# ==========================================
 
-def fetch_data(code="sh.600000", start_date="2023-01-01", end_date="2024-01-01"):
-    """获取数据"""
+
+def calculate_start_date(end_date_str, trading_days_needed):
+    """根据截止日期和需要的【交易日】数量，自动推算安全的起始【自然日】"""
+    end_date_obj = datetime.strptime(end_date_str, '%Y-%m-%d')
+    # 交易日转自然日 (*1.46) + 节假日余量 + 指标预热补偿 (ATR_PERIOD)
+    calendar_days_to_subtract = int(
+        (trading_days_needed + ATR_PERIOD) * 1.46) + 20
+    start_date_obj = end_date_obj - timedelta(days=calendar_days_to_subtract)
+    return start_date_obj.strftime('%Y-%m-%d')
+
+# ==========================================
+# 模块二：无缝接入时间引擎的 P&F 数据中枢
+# ==========================================
+
+
+def fetch_pnf_data_auto(code="sh.600000", end_date=None, target_days=250):
+    """
+    全自动数据拉取与清洗函数
+    :param target_days: 你希望在图表上展现的最近 N 个交易日 (默认一年约250天)
+    """
+    if end_date is None:
+        end_date = datetime.today().strftime('%Y-%m-%d')
+
+    start_date = calculate_start_date(end_date, target_days)
+
+    print("-" * 40)
+    print(f"目标请求: {code} 最近 {target_days} 个交易日的日线数据")
+    print(f"时间引擎分配: 从 {start_date} 到 {end_date} (已包含指标预热与节假日余量)")
+    print("-" * 40)
+
     bs.login()
     rs = bs.query_history_k_data_plus(
         code, "date,open,high,low,close,volume",
@@ -46,6 +76,7 @@ def fetch_data(code="sh.600000", start_date="2023-01-01", end_date="2024-01-01")
     if df.empty:
         return df
 
+    # 数据类型与格式清洗
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
     df[numeric_cols] = df[numeric_cols].astype(float)
     df['date'] = pd.to_datetime(df['date'])
@@ -60,40 +91,50 @@ def fetch_data(code="sh.600000", start_date="2023-01-01", end_date="2024-01-01")
         'volume': 'Volume'
     }, inplace=True)
 
+    # 计算 ATR 并执行空值清洗 (此时会消耗掉最前面的 ATR_PERIOD 根线)
+    df.ta.atr(length=ATR_PERIOD, append=True)
+    df.dropna(inplace=True)
+
+    # 尾部精确截断：确保最终交给绘图引擎的数据，刚刚好就是用户要求的 target_days 根
+    if len(df) > target_days:
+        df = df.tail(target_days)
+
     return df
 
 
+# ==========================================
+# 模块三：实战执行与绘图区
+# ==========================================
 if __name__ == '__main__':
-    stock_code = "sh.688271"  
+    # 惠泰医疗 688617
+    # 联影医疗 688271
+    # 洛阳钼业 603993 
+    stock_code = "sh.688271"
 
-    print(f"正在拉取 {stock_code} 数据...")
-    df = fetch_data(stock_code, "2025-01-01", "2026-04-08")
+    # 你只需发号施令：“给我拉最近一年的数据（250个交易日）”，其余全部自动化
+    df = fetch_pnf_data_auto(stock_code, end_date=None, target_days=250)
 
     if not df.empty:
-        # 1. 计算 ATR
-        df.ta.atr(length=ATR_PERIOD, append=True)
-        df.dropna(inplace=True)
-
-        # 2. 提取最新 ATR 并计算箱体大小
+        # 1. 提取最新 ATR 并计算动态箱体
         col_name = f'ATRr_{ATR_PERIOD}'
         raw_atr = df[col_name].iloc[-1]
         custom_box_size = round(raw_atr * BOX_MULTIPLIER, 2)
 
-        print("-" * 40)
+        print(f"数据清洗完毕，最终实际有效 K线数量: {len(df)} 根")
         print(f"设定箱体大小 (Box Size): {custom_box_size}")
         print(
             f"设定反转阈值 (Reversal): {REVERSAL_AMOUNT} 箱 ({custom_box_size * REVERSAL_AMOUNT:.2f} 元)")
         print("-" * 40)
 
-        # 3. 配置 P&F 参数
+        # 2. 配置 P&F 参数
         pnf_params = dict(box_size=custom_box_size, reversal=REVERSAL_AMOUNT)
 
         chart_title = (
             f"Point & Figure (P&F) Chart - {stock_code}\n"
-            f"(Box={custom_box_size} | Reversal={REVERSAL_AMOUNT} | ATR_Base={ATR_PERIOD})"
+            f"(Box={custom_box_size} | Reversal={REVERSAL_AMOUNT} | Base={ATR_PERIOD}d ATR)"
         )
 
-        # 4. 绘制 P&F 图
+        # 3. 绘制脱离时间轴的 P&F 图
         mpf.plot(
             df,
             type='pnf',
@@ -103,4 +144,4 @@ if __name__ == '__main__':
             ylabel='Price'
         )
     else:
-        print(f"\n【数据空值熔断】未能获取到 {stock_code} 的历史行情数据！")
+        print(f"\n【数据空值熔断】未能获取到 {stock_code} 的历史行情数据！请检查标的或网络。")

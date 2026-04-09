@@ -8,10 +8,15 @@ from datetime import datetime, timedelta
 # ==========================================
 # 【全局核心参数区】
 # ==========================================
-ATR_MULTIPLIER = 0.85  # ATR 乘数
-TEST_PERIODS = [7, 10, 14, 20]  # 需要遍历测试的 ATR 周期列表
+ATR_MULTIPLIER = 0.9  # ATR 乘数
+TEST_PERIODS = [14,]  # 需要遍历测试的 ATR 周期列表
 
-STOCK_CODE = "sh.688617"
+
+# 惠泰医疗 688617
+# 联影医疗 688271
+# 洛阳钼业 603993
+
+STOCK_CODE = "sh.603993"
 TARGET_K_COUNT = 250  # 需要获取/展示的目标 K 线数量
 END_DATE = None       # 截止日期。设为 None 则自动获取真实时间的今天
 
