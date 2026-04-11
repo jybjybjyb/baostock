@@ -22,7 +22,7 @@ mpf_utils._calculate_atr = patched_calculate_atr
 # 【量化系统核心参数控制台】
 # ==========================================
 ATR_PERIOD = 14        # ATR 计算周期
-BOX_MULTIPLIER = 0.55   # 箱体大小乘数 (Box Size)
+BOX_MULTIPLIER = 0.5   # 箱体大小乘数 (Box Size)
 REVERSAL_AMOUNT = 3    # 反转系数
 # ==========================================
 
@@ -106,9 +106,13 @@ def fetch_pnf_data_auto(code="sh.600000", end_date=None, target_days=250):
 # 模块三：实战执行与绘图区
 # ==========================================
 if __name__ == '__main__':
+
     # 惠泰医疗 688617
     # 联影医疗 688271
     # 洛阳钼业 603993 
+    # 百济神州U 603235
+    # 三一重工 600031
+    
     stock_code = "sh.688271"
 
     # 你只需发号施令：“给我拉最近一年的数据（250个交易日）”，其余全部自动化

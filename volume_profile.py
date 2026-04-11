@@ -133,13 +133,15 @@ if __name__ == '__main__':
     # 惠泰医疗 688617
     # 联影医疗 688271
     # 洛阳钼业 603993 
+    # 百济神州U 603235
+    # 三一重工 600031
 
-    stock_code = "sh.688235"
+    stock_code = "sh.603235"
 
     # 你只需要告诉它你要看最近多少个交易日（比如最近 20 天，约一个月）
     # 它会自动推算时间、自动剔除节假日、自动精确截断所需 K 线
     df_min = fetch_minute_data_auto(
-        code=stock_code, end_date=None, target_days=120, freq="15")
+        code=stock_code, end_date=None, target_days=120, freq="5")
 
     if not df_min.empty:
         plot_high_res_volume_profile(df_min, stock_code, bins=80)
