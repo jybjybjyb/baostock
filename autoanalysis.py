@@ -107,7 +107,7 @@ def fetch_k_data(code, start_date, end_date, freq):
     rs = bs.query_history_k_data_plus(
         code, fields,
         start_date=start_date, end_date=end_date,
-        frequency=freq, adjustflag="3"
+        frequency=freq, adjustflag="2"
     )
     data_list = []
     while (rs.error_code == '0') & rs.next():
