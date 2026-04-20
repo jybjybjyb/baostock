@@ -1,3 +1,4 @@
+import alphalens
 import os
 import glob
 import time
@@ -10,7 +11,90 @@ import statsmodels.api as sm
 DATA_DIR = "zz800_parquet_data"
 # 回测横截面锚点：为了能计算“未来5天”的收益率，锚点定在几周前
 # (如果你用今天的日期，就没有“未来”可以用来计算 Target Return 了)
-TARGET_DATE = "2026-04-10"
+TARGET_DATE = "2026-04-13"
+
+
+import numpy as np
+import pandas as pd
+from scipy.linalg import fractional_matrix_power
+
+def symmetric_orthogonalize(df, factor_cols):
+    """
+    对指定的风格因子进行对称正交化，消除多重共线性
+    """
+    print(f"🧹 正在对 {len(factor_cols)} 个因子执行对称正交化...")
+    
+    # 1. 提取因子矩阵 F (N行 x K列)
+    # 确保没有 NaN，且最好已经做过标准化 (Z-score)
+    F = df[factor_cols].values 
+    
+    # 2. 计算内积矩阵 M = F^T * F (相当于协方差矩阵)
+    M = np.dot(F.T, F)
+    
+    # 3. 计算 M 的负二分之一次方 (M^(-1/2))
+    # 使用 scipy 的 fractional_matrix_power 处理矩阵分数次幂
+    M_inv_half = fractional_matrix_power(M, -0.5)
+    
+    # 4. 生成正交化后的矩阵: F_orth = F * M^(-1/2)
+    F_orth = np.dot(F, M_inv_half)
+    
+    # 5. 将结果覆盖回 DataFrame
+    df_orth = df.copy()
+    # 取实数部分（防止计算精度导致的极小复数）
+    df_orth[factor_cols] = np.real(F_orth) 
+    
+    print("✅ 正交化完成！因子间的相关系数已全部归零。")
+    return df_orth
+
+
+def run_alphalens_tearsheet(df_k_history, df_factors, target_factor='Value_BP'):
+    """
+    一键生成 Alphalens 因子评估报告
+    参数:
+    - df_k_history: 我们之前用 Parquet 引擎加载的完整 K 线数据
+    - df_factors: 包含历史每天每只股票因子值的 DataFrame
+    - target_factor: 你想测试的具体因子名称
+    """
+    print(f"\n📊 正在准备 [{target_factor}] 的 Alphalens 数据格式...")
+
+    # 1. 准备价格矩阵 (Pricing Data)
+    # 必须是：行是 datetime，列是股票代码，值是收盘价
+    df_pricing = df_k_history.pivot(
+        index='date', columns='code', values='close')
+    # 确保索引是 tz-localized 的 datetime 格式 (Alphalens 的强迫症要求)
+    df_pricing.index = pd.to_datetime(df_pricing.index).tz_localize('UTC')
+
+    # 2. 准备因子数据 (Factor Data)
+    # 必须是：MultiIndex (date, asset) 的 Series
+    df_fac = df_factors[['date', 'code', target_factor]].copy()
+    df_fac['date'] = pd.to_datetime(df_fac['date']).dt.tz_localize('UTC')
+    df_fac = df_fac.set_index(['date', 'code'])
+    factor_series = df_fac[target_factor]
+
+    # 3. 核心步骤：数据对齐与前向收益计算 (Clean Factor)
+    # 这个函数会自动帮你计算未来 1天、5天、10天 的收益率，并剔除停牌/退市数据
+    print("⏳ 正在计算前向收益与分位数对齐...")
+    try:
+        factor_data = alphalens.utils.get_clean_factor_and_forward_returns(
+            factor=factor_series,
+            prices=df_pricing,
+            quantiles=5,          # 分为 5 组进行回测
+            periods=(1, 5, 10),   # 分别看未来 1 天、5 天、10 天的预测力
+            max_loss=0.35         # 允许最大 35% 的数据因停牌等原因丢失
+        )
+    except Exception as e:
+        print(f"数据清洗失败: {e}")
+        return
+
+    # 4. 一键召唤神龙：生成全套评估报告
+    print("📈 生成因子全景评估报告 (请在 Jupyter Notebook 中查看效果最佳)...")
+
+    # 打印文字版的 IC/IR 和收益率总结表格
+    alphalens.tears.create_summary_tear_sheet(factor_data)
+
+    # 如果你在 Jupyter 跑，用下面这行可以画出所有的图表：
+    # alphalens.tears.create_full_tear_sheet(factor_data)
+    
 
 
 def load_local_k_data(target_date):
