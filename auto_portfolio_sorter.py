@@ -179,8 +179,12 @@ def update_and_sort_list(df_latest, best_factor):
             f"  [Top {i+1}] {row['code']} {name.ljust(8)} | {best_factor} 得分: {row[best_factor]:>5.2f}")
     print("=" * 60)
 
+    return df_final
+
 
 if __name__ == "__main__":
     df_radar, df_latest = get_market_data_and_factors()
     king_factor = find_king_factor(df_radar)
     update_and_sort_list(df_latest, king_factor)
+
+

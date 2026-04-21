@@ -117,7 +117,7 @@ def run_ols_radar(df):
         print(f"[{factor.ljust(10)}] Beta: {coef:>6.3f} | T值: {t_val:>5.2f} {sig} -> 资金{direct}")
 
 
-def drill_down_industry_leaders(df, factor_cols, top_n_ind=3, top_n_stock=3):
+def drill_down_industry_leaders(df, factor_cols, top_n_ind=5, top_n_stock=10):
     """
     深度下钻：提取领涨/领跌板块，并刻画强势板块内龙头股的因子画像
     """
@@ -129,11 +129,11 @@ def drill_down_industry_leaders(df, factor_cols, top_n_ind=3, top_n_stock=3):
     ind_returns = df.groupby('Industry')['Target_Y'].mean() * 100
     ind_returns = ind_returns.sort_values(ascending=False)
 
-    print("\n🏆 【当周强势板块 Top 10】")
+    print("\n🏆 【当周强势板块 Top 】")
     for ind, ret in ind_returns.head(top_n_ind).items():
         print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
 
-    print("\n📉 【当周弱势板块 Bottom 10】")
+    print("\n📉 【当周弱势板块 Bottom 】")
     for ind, ret in ind_returns.tail(top_n_ind).items():
         print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
 
@@ -179,8 +179,7 @@ def drill_down_industry_leaders(df, factor_cols, top_n_ind=3, top_n_stock=3):
 
 
 if __name__ == "__main__":
-    import time
-    start_time = time.time()
+
 
     # 1. 极速算因子 (全本地)
     df_radar = fast_radar_calculation()
@@ -197,6 +196,6 @@ if __name__ == "__main__":
     # 5. 执行深度下钻
     factor_cols = ['Momentum', 'Short_Rev',
                    'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
-    drill_down_industry_leaders(df_final, factor_cols,top_n_ind=3, top_n_stock=10)
+    drill_down_industry_leaders(df_final, factor_cols,top_n_ind=5, top_n_stock=10)
 
-    print(f"\n⏱️ 扫描完毕，纯本地极速引擎总耗时: {time.time() - start_time:.2f}s")
+
