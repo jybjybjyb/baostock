@@ -11,9 +11,8 @@ warnings.filterwarnings('ignore')
 # --- 配置区 ---
 DATA_DIR = "zz800_parquet_data"
 LIST_FILE = "list.csv"
-FACTOR_COLS = ['Momentum', 'Short_Rev',
-               'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
-
+FACTOR_COLS = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP',
+        'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']
 
 def get_market_data_and_factors():
     """读取全量数据，计算雷达所需(T-5)和最新截面(T0)的因子"""
@@ -37,10 +36,15 @@ def get_market_data_and_factors():
 
     grouped = df_all.groupby('code')
     df_all['Target_Y'] = grouped['close'].shift(-5) / df_all['close'] - 1
+    
+    # --- 古典因子 ---
     df_all['Momentum'] = grouped['close'].pct_change(20)
     df_all['Short_Rev'] = -1 * grouped['close'].pct_change(5)
-    df_all['Low_Vol'] = -1 * \
-        grouped['pctChg'].transform(lambda x: x.rolling(20).std())
+    
+    # 提取 20日波动率 (给低波因子和夏普动量共用)
+    vol_20 = grouped['pctChg'].transform(lambda x: x.rolling(20).std())
+    df_all['Low_Vol'] = -1 * vol_20
+    
     df_all['Liquidity'] = grouped['turn'].transform(
         lambda x: x.rolling(20).mean())
     df_all['Size'] = np.log(grouped['amount'].transform(
@@ -49,18 +53,31 @@ def get_market_data_and_factors():
     df_all['Value_BP'] = np.where(
         df_all['pbMRQ'] > 0, 1 / df_all['pbMRQ'], np.nan)
 
+    # --- ✨ 新增：高阶量价因子计算逻辑 ---
+    # 1. 夏普动量
+    df_all['Mom_Sharpe'] = df_all['Momentum'] / (vol_20 + 1e-8)
+    
+    # 2. 量价相关性
+    df_all['Vol_Price_Corr'] = grouped.apply(
+        lambda x: x['pctChg'].rolling(20).corr(x['turn'])
+    ).reset_index(level=0, drop=True)
+    
+    # 3. Amihud 绝对流动性溢价
+    daily_amihud = np.abs(df_all['pctChg']) / (df_all['amount'] + 1e-8)
+    df_all['Amihud'] = df_all.assign(amihud=daily_amihud).groupby('code')['amihud'].transform(
+        lambda x: np.log(x.rolling(20).mean() + 1e-8)
+    )
+
     # df_radar 用于 OLS 训练，必须极其纯净，保留 dropna
     df_radar = df_all[df_all['date'] == t5_date].copy().dropna(
         subset=['Target_Y'] + FACTOR_COLS)
 
-    # ✨ 核心修复：df_latest 仅用于给个股打分，去掉 dropna()，允许偏科生存在！
+    # df_latest 仅用于给个股打分，去掉 dropna()，允许偏科生存在！
     df_latest = df_all[df_all['date'] == t0_date].copy()
 
     return df_radar, df_latest
-
-
 def find_king_factor(df_radar):
-    """运行截面回归，找出当前Beta最高的最强因子"""
+    """运行截面回归，找出当前Beta最高的最强因子 (升级版：返回完整战报)"""
     print("\n📡 2. 启动雷达扫描，寻找当前市场 [最强因子]...")
     df = df_radar.copy()
 
@@ -73,26 +90,38 @@ def find_king_factor(df_radar):
     X = sm.add_constant(df[FACTOR_COLS])
     model = sm.OLS(Y, X).fit()
 
+    # ✨ 核心改进：创建一个列表存储所有因子的战绩
+    factor_stats = []
     best_factor = None
     max_beta = -float('inf')
 
     for factor in FACTOR_COLS:
         beta = model.params[factor]
         t_val = model.tvalues[factor]
-        print(
-            f"  > {factor.ljust(10)} : Beta = {beta:>6.3f} | T值 = {t_val:>6.2f}")
+        print(f"  > {factor.ljust(15)} : Beta = {beta:>6.3f} | T值 = {t_val:>6.2f}")
+        
+        # 将结果存入字典
+        factor_stats.append({
+            '因子名称': factor,
+            'Beta (强度)': round(beta, 4),
+            'T值 (显著性)': round(t_val, 2)
+        })
+
         if beta > max_beta and t_val > 1.0:
             max_beta = beta
             best_factor = factor
 
     if best_factor is None:
         best_factor = 'Momentum'
+        print(f"⚠️ 未发现显著因子，默认使用: 【{best_factor}】")
     else:
-        print(f"👑 雷达锁定！当前市场超额暴露最大的核心因子是: 【{best_factor}】")
+        print(f"👑 雷达锁定！当前市场核心因子是: 【{best_factor}】")
 
-    return best_factor
-
-# --- 核心升级：前缀自动转换函数 ---
+    # ✨ 核心改进：将战报转为 DataFrame 并按强度排序
+    df_stats = pd.DataFrame(factor_stats).sort_values(by='Beta (强度)', ascending=False)
+    
+    # 返回两个对象：最强因子名称 和 完整战报表
+    return best_factor, df_stats
 
 
 def normalize_code(code_str):
@@ -184,7 +213,11 @@ def update_and_sort_list(df_latest, best_factor):
 
 if __name__ == "__main__":
     df_radar, df_latest = get_market_data_and_factors()
-    king_factor = find_king_factor(df_radar)
+    
+    # ✨ 核心修复：用两个变量分别接住“王冠”和“战绩表”
+    king_factor, king_stats = find_king_factor(df_radar)
+    
+    # 排行榜排序时，只传入因子的名字 (king_factor)
     update_and_sort_list(df_latest, king_factor)
 
 

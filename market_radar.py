@@ -43,8 +43,9 @@ def load_local_metadata():
     # 全部以字符串形式读取，防止 000001 变成 1
     return pd.read_csv(META_FILE, dtype=str, encoding='utf-8-sig')
 
+
 def fast_radar_calculation():
-    """彻底摒弃 For 循环的截面因子构建器"""
+    """彻底摒弃 For 循环的截面因子构建器 (包含高阶量价因子)"""
     print("📡 1. 启动雷达：全量向量化提取截面特征...")
     all_files = glob.glob(f"{DATA_DIR}/*.parquet")
     df_all = pd.concat([pd.read_parquet(f) for f in all_files], ignore_index=True)
@@ -58,28 +59,48 @@ def fast_radar_calculation():
     # 极速特征工程
     grouped = df_all.groupby('code')
     
-    # 关键逻辑：我们要解释最近 5 天 (T-5 到 T0) 的收益
-    # 那么因子特征必须是 T-5 那一天的状态！
-    # 收益率 Target_Y: T-5 到 T0 的涨跌幅 (使用 -5 的 shift，代表未来5天收益)
     df_all['Target_Y'] = grouped['close'].shift(-5) / df_all['close'] - 1
     
+    # --- 古典因子 ---
     df_all['Momentum'] = grouped['close'].pct_change(20)
     df_all['Short_Rev'] = -1 * grouped['close'].pct_change(5)
-    df_all['Low_Vol'] = -1 * grouped['pctChg'].transform(lambda x: x.rolling(20).std())
+    
+    # 提取 20日波动率供后续使用
+    vol_20 = grouped['pctChg'].transform(lambda x: x.rolling(20).std())
+    df_all['Low_Vol'] = -1 * vol_20
+    
     df_all['Liquidity'] = grouped['turn'].transform(lambda x: x.rolling(20).mean())
     df_all['Size'] = np.log(grouped['amount'].transform(lambda x: x.rolling(20).mean()) / (df_all['Liquidity']/100 + 1e-8))
     
     df_all['pbMRQ'] = pd.to_numeric(df_all['pbMRQ'], errors='coerce')
     df_all['Value_BP'] = np.where(df_all['pbMRQ'] > 0, 1 / df_all['pbMRQ'], np.nan)
     
+    # --- ✨ 新增：高阶量价因子计算逻辑 ---
+    # 1. 夏普动量
+    df_all['Mom_Sharpe'] = df_all['Momentum'] / (vol_20 + 1e-8)
+    
+    # 2. 量价相关性
+    df_all['Vol_Price_Corr'] = grouped.apply(
+        lambda x: x['pctChg'].rolling(20).corr(x['turn'])
+    ).reset_index(level=0, drop=True)
+    
+    # 3. Amihud 绝对流动性溢价
+    daily_amihud = np.abs(df_all['pctChg']) / (df_all['amount'] + 1e-8)
+    df_all['Amihud'] = df_all.assign(amihud=daily_amihud).groupby('code')['amihud'].transform(
+        lambda x: np.log(x.rolling(20).mean() + 1e-8)
+    )
+
     # 抽取 T-5 那一天作为横截面输入
-    # 因为在 T-5 那一天，Target_Y (未来5天收益) 刚好包含了直到 T0 的表现
     unique_dates = sorted(df_all['date'].unique())
     if len(unique_dates) < 6: raise ValueError("数据过少")
     t_minus_5_date = unique_dates[-6] 
     
     df_cross_section = df_all[df_all['date'] == t_minus_5_date].copy()
-    df_factors = df_cross_section[['code', 'Target_Y', 'Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP']].dropna()
+    
+    # 这里提取才不会报错，因为上面已经把这三列算出来了
+    df_factors = df_cross_section[['code', 'Target_Y', 'Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP',
+    'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']].dropna()
+    
     return df_factors
 
 def symmetric_orthogonalize(df, factor_cols):
@@ -92,7 +113,8 @@ def symmetric_orthogonalize(df, factor_cols):
 def run_ols_radar(df):
     """截面方差分解 (升级版：返回结构化统计数据)"""
     print("\n🔬 3. 执行市场风向 OLS 归因分解...")
-    factor_cols = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
+    factor_cols = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP',
+    'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']
     
     for c in factor_cols:
         df[c] = np.clip(df[c], df[c].mean()-3*df[c].std(), df[c].mean()+3*df[c].std())
@@ -202,8 +224,8 @@ if __name__ == "__main__":
     run_ols_radar(df_final)
 
     # 5. 执行深度下钻
-    factor_cols = ['Momentum', 'Short_Rev',
-                   'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
+    factor_cols = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP',
+    'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']
     drill_down_industry_leaders(df_final, factor_cols,top_n_ind=5, top_n_stock=10)
 
 
