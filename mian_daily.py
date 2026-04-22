@@ -32,7 +32,7 @@ if __name__ == "__main__":
         print(f"❌ 数据同步失败。原因: {e}")
         exit()
 
-    # [步骤 2/4] 启动市场风向雷达
+    # [步骤 2/4] 启动市场风向雷达 (修改部分)
     print("\n>>> [步骤 2/4] 启动市场风向雷达 (Market Radar)...")
     try:
         df_radar_raw = radar.fast_radar_calculation()
@@ -40,14 +40,16 @@ if __name__ == "__main__":
         df_final_radar = pd.merge(
             df_radar_raw, df_meta, on='code', how='inner').dropna()
 
-        radar.run_ols_radar(df_final_radar)
+        # ✨ 核心改动：用变量接住报告结果
+        ols_report = radar.run_ols_radar(df_final_radar)
         radar_factors = ['Momentum', 'Short_Rev',
                          'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
-        radar.drill_down_industry_leaders(
+        drill_report = radar.drill_down_industry_leaders(
             df_final_radar, radar_factors, top_n_ind=3, top_n_stock=10)
     except Exception as e:
         print(f"❌ 雷达扫描失败。原因: {e}")
         exit()
+
 
     # [步骤 3/4] 底仓自动打分与洗牌
     print("\n>>> [步骤 3/4] 启动底仓自动洗牌机 (Portfolio Sorter)...")
@@ -60,17 +62,19 @@ if __name__ == "__main__":
         print(f"❌ 底仓洗牌失败。原因: {e}")
         exit()
 
-    # ✨ [步骤 4/4] 每日战报自动归档为 PKL
+    # [步骤 4/4] 每日战报自动归档为 PKL (修改部分)
     print("\n>>> [步骤 4/4] 正在生成并打包今日战报 (Daily Snapshot)...")
     try:
         os.makedirs("Daily_Reports", exist_ok=True)
 
-        # 将我们最关心的核心数据装进一个字典
+        # ✨ 核心改动：把刚捕获的报告装进 PKL 字典
         daily_snapshot = {
             "date": today_str,
             "king_factor": king_factor,
-            "radar_data": df_final_radar,   # 全市场的雷达探测底稿
-            "top_picks": df_top_picks       # 洗牌后的最终金股名单
+            "ols_report": ols_report,     # 市场风向标数据
+            "drill_report": drill_report,  # 行业与龙头画像数据
+            "top_picks": df_top_picks,    # 最终底仓洗牌结果
+            "radar_data": df_final_radar  # 原始底稿备查
         }
 
         report_file = f"Daily_Reports/Report_{today_str}.pkl"
@@ -80,6 +84,7 @@ if __name__ == "__main__":
         print(f"📦 战报已加密归档至: {report_file}")
     except Exception as e:
         print(f"❌ 战报归档失败。原因: {e}")
+        exit()  
 
     # ==========================================
     # 收尾汇报

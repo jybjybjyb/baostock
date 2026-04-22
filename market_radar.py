@@ -89,13 +89,11 @@ def symmetric_orthogonalize(df, factor_cols):
     df_orth = df.copy()
     df_orth[factor_cols] = np.real(F_orth) 
     return df_orth
-
 def run_ols_radar(df):
-    """截面方差分解"""
+    """截面方差分解 (升级版：返回结构化统计数据)"""
     print("\n🔬 3. 执行市场风向 OLS 归因分解...")
     factor_cols = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP']
     
-    # 标准化 & 正交化
     for c in factor_cols:
         df[c] = np.clip(df[c], df[c].mean()-3*df[c].std(), df[c].mean()+3*df[c].std())
         df[c] = (df[c] - df[c].mean()) / df[c].std()
@@ -110,71 +108,81 @@ def run_ols_radar(df):
     
     print(f"\n📈 风格因子解释力: {r2_factors * 100:>5.2f}% | 🏭 行业板块解释力: {r2_ind * 100:>5.2f}%")
     print("\n【剔除行业影响后的纯粹风向】")
+    
+    # ✨ 核心改造：收集数据
+    stats_list = []
     for factor in factor_cols:
         coef, t_val = model_full.params[factor], model_full.tvalues[factor]
         sig = "★" if abs(t_val) > 1.96 else " "
         direct = "追捧" if coef > 0 else "抛售"
         print(f"[{factor.ljust(10)}] Beta: {coef:>6.3f} | T值: {t_val:>5.2f} {sig} -> 资金{direct}")
+        
+        stats_list.append({
+            '因子 (Factor)': factor, 
+            'Beta系数': round(coef, 3), 
+            'T值 (显著性)': round(t_val, 2), 
+            '风向状态': f"{direct} {sig}"
+        })
+        
+    return {
+        "r2_factors": r2_factors,
+        "r2_ind": r2_ind,
+        "stats_df": pd.DataFrame(stats_list)
+    }
 
-
-def drill_down_industry_leaders(df, factor_cols, top_n_ind=5, top_n_stock=10):
-    """
-    深度下钻：提取领涨/领跌板块，并刻画强势板块内龙头股的因子画像
-    """
+def drill_down_industry_leaders(df, factor_cols, top_n_ind=3, top_n_stock=3):
+    """深度下钻 (升级版：返回结构化画像)"""
     print("\n" + "="*65)
     print("🔍 【深度下钻】行业领涨板块与龙头股因子画像")
     print("="*65)
 
-    # 1. 计算各板块平均涨跌幅
     ind_returns = df.groupby('Industry')['Target_Y'].mean() * 100
     ind_returns = ind_returns.sort_values(ascending=False)
+    
+    top_inds = ind_returns.head(top_n_ind)
+    bottom_inds = ind_returns.tail(top_n_ind)
 
-    print("\n🏆 【当周强势板块 Top 】")
-    for ind, ret in ind_returns.head(top_n_ind).items():
-        print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
+    print("\n🏆 【当周强势板块 Top】")
+    for ind, ret in top_inds.items(): print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
 
-    print("\n📉 【当周弱势板块 Bottom 】")
-    for ind, ret in ind_returns.tail(top_n_ind).items():
-        print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
+    print("\n📉 【当周弱势板块 Bottom】")
+    for ind, ret in bottom_inds.items(): print(f"  > {ind.ljust(8)} : 板块平均收益 {ret:>5.2f}%")
 
     print("\n🎯 【强势板块内部：领涨龙头股的风格特征】")
-    # 2. 深度分析强势板块内的龙头股
-    for ind in ind_returns.head(top_n_ind).index:
+    
+    # ✨ 核心改造：收集画像数据
+    portrait_list = []
+    for ind in top_inds.index:
         print(f"\n[ 行业板块: {ind} ]")
-
-        # 取出该板块的所有股票
         df_ind = df[df['Industry'] == ind]
-
-        # 找出该板块内涨得最好的 Top 3 股票
-        top_stocks = df_ind.sort_values(
-            by='Target_Y', ascending=False).head(top_n_stock)
+        top_stocks = df_ind.sort_values(by='Target_Y', ascending=False).head(top_n_stock)
 
         for _, row in top_stocks.iterrows():
             code = row['code']
-            # ✨ 核心增加 1：从 row 里把 name 提取出来，如果没有就显示未知
             name = row.get('name', '未知')
             ret = row['Target_Y'] * 100
 
-            # 3. 寻找该股票最突出的因子画像 (Z-score 绝对值 > 1.0 的特征)
             features = []
             for f in factor_cols:
                 z_score = row[f]
-                # 因为数据是标准化过的，>1 表示排在全市场前 16%，属于极度突出
-                if z_score > 1.0:
-                    features.append(f"高{f}(+{z_score:.1f})")
+                if z_score > 1.0: features.append(f"高{f}(+{z_score:.1f})")
                 elif z_score < -1.0:
-                    # 对于 Size，负数代表小盘；对于 Value_BP，负数代表高估值
-                    if f == 'Size':
-                        features.append(f"微盘股({z_score:.1f})")
-                    else:
-                        features.append(f"低{f}({z_score:.1f})")
+                    if f == 'Size': features.append(f"微盘股({z_score:.1f})")
+                    else: features.append(f"低{f}({z_score:.1f})")
 
-            # 如果没有特别突出的因子，说明是跟着板块一起涨的“跟风股”
-            feature_str = ", ".join(features) if features else "特征中庸 (随板块普涨)"
+            feature_str = ", ".join(features) if features else "中庸(随板块普涨)"
+            print(f"  标的: {code:<10} {name:<8} | 涨幅: +{ret:>5.2f}% | 画像: {feature_str}")
+            
+            portrait_list.append({
+                '强势板块': ind, '代码': code, '名称': name, 
+                '预期超额涨幅': f"+{ret:.2f}%", '核心因子画像': feature_str
+            })
 
-            # ✨ 核心增加 2：在 print 里把 name 加上，排版对齐
-            print(
-                f"  标的: {code:<10} {name:<8} | 涨幅: +{ret:>5.2f}% | 画像: {feature_str}")
+    return {
+        "top_industries": top_inds.reset_index().rename(columns={'Industry':'板块名称', 'Target_Y':'平均超额涨幅(%)'}),
+        "bottom_industries": bottom_inds.reset_index().rename(columns={'Industry':'板块名称', 'Target_Y':'平均超额涨幅(%)'}),
+        "portraits_df": pd.DataFrame(portrait_list)
+    }
 
 
 
