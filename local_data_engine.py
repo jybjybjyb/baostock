@@ -81,35 +81,62 @@ def update_single_stock(code, today_str):
     else:
         return 0, "停牌或无数据"
 
+
 def run_data_engine():
-    """主引擎"""
-    bs.login()
+    """主引擎 (升级版：加入工业级网络防断线重试机制)"""
+    print("\n🔌 正在尝试连接 BaoStock 服务器...")
+
+    # ✨ 核心修复：重试机制 (最多尝试 3 次)
+    login_success = False
+    for attempt in range(3):
+        try:
+            # 尝试登录
+            lg = bs.login()
+            # BaoStock 的 error_code 为 '0' 才是真正成功
+            if lg.error_code == '0':
+                print("✅ BaoStock 登录成功！")
+                login_success = True
+                break
+            else:
+                print(f"⚠️ 登录失败，错误信息: {lg.error_msg} (尝试 {attempt+1}/3)")
+        except Exception as e:
+            print(f"⚠️ 网络 Socket 异常: {e} (尝试 {attempt+1}/3)")
+
+        # 如果失败了，不要立刻猛烈请求，休息 5 秒钟等服务器喘口气
+        print("⏳ 等待 5 秒后进行下一次重连...")
+        time.sleep(5)
+
+    # 如果 3 次都失败了，抛出严重异常，让 main.py 里的 try-except 捕获并熔断
+    if not login_success:
+        raise ConnectionError("❌ BaoStock 服务器彻底无响应，可能是官方在维护，请半小时后再试！")
+
+    # 登录成功后，继续执行原来的逻辑
     init_environment()
-    
+
     codes = get_zz800_codes()
     today_str = datetime.now().strftime("%Y-%m-%d")
-    
+
     print("\n🚀 开始执行中证800本地数据同步引擎...")
     start_time = time.time()
-    
+
     updated_count = 0
     total_new_rows = 0
-    
-    # 遍历更新 (加入了进度显示)
+
+    # 遍历更新
     for i, code in enumerate(codes):
         new_rows, status = update_single_stock(code, today_str)
         if new_rows > 0:
             updated_count += 1
             total_new_rows += new_rows
-        
+
         # 打印简易进度条
         if (i + 1) % 50 == 0 or i == len(codes) - 1:
             print(f"进度: {i+1}/{len(codes)} | 最近处理: {code} [{status}]")
-            
+
     end_time = time.time()
     bs.logout()
-    
-    print("\n" + "="*40)   
+
+    print("\n" + "="*40)
     print("🎉 同步任务完美收官！")
     print(f"⏱️ 耗时: {end_time - start_time:.2f} 秒")
     print(f"📈 本次发生更新的股票数: {updated_count} 只")
