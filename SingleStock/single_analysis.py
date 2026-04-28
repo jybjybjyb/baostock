@@ -37,7 +37,7 @@ PARQUET_DIR = "zz800_parquet_data"
 
 # 🔭 时间视野
 TARGET_DAILY_DAYS = 250
-TARGET_VP_DAYS = 40
+TARGET_VP_DAYS = 120
 
 # ⚔️ 算力与防守线配置
 ATR_PERIOD = 20
