@@ -1,7 +1,5 @@
 # ==========================================
 # 量化帝国中央控制台 (Daily Pipeline)
-# 运行频率：每天收盘后 15:30 运行一次
-# 升级：新增每日战报 PKL 自动归档功能
 # ==========================================
 import os
 import time
@@ -32,71 +30,82 @@ if __name__ == "__main__":
         print(f"❌ 数据同步失败。原因: {e}")
         exit()
 
-    # [步骤 2/4] 启动市场风向雷达 (修改部分)
+    # [步骤 2/4] 启动市场风向雷达与板块时序分析
     print("\n>>> [步骤 2/4] 启动市场风向雷达 (Market Radar)...")
     try:
+        # 1. 执行原有的截面归因
         df_radar_raw = radar.fast_radar_calculation()
         df_meta = radar.load_local_metadata()
         df_final_radar = pd.merge(
             df_radar_raw, df_meta, on='code', how='inner').dropna()
 
-        # ✨ 核心改动：用变量接住报告结果
         ols_report = radar.run_ols_radar(df_final_radar)
         radar_factors = ['Momentum', 'Short_Rev', 'Low_Vol', 'Liquidity', 'Size', 'Value_BP',
-        'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']
+                         'Mom_Sharpe', 'Vol_Price_Corr', 'Amihud']
         drill_report = radar.drill_down_industry_leaders(
-            df_final_radar, radar_factors, top_n_ind=5, top_n_stock=15)    # 提示：改完这里后，明天生成的战报 PKL 里，强势板块画像就会自动变多。
+            df_final_radar, radar_factors, top_n_ind=5, top_n_stock=15)
+
+        # ✨ 新增：2. 执行板块轮动时序透视
+        sector_pivot, sector_rank = radar.analyze_sector_trends(lookback=5)
+
     except Exception as e:
         print(f"❌ 雷达扫描失败。原因: {e}")
         exit()
-    
-    # [步骤 3/4] 底仓自动打分与洗牌
-    print("\n>>> [步骤 3/4] 启动底仓自动洗牌机 (Portfolio Sorter)...")
+
+    # [步骤 3/4] 底仓洗牌与 ZZ800 全市场排名
+    print("\n>>> [步骤 3/4] 启动底仓自动洗牌机与全市场扫描器...")
     try:
         df_radar_sorter, df_latest = sorter.get_market_data_and_factors()
-        king_factor, king_stats = sorter.find_king_factor(df_radar_sorter)
+
+        # ✨ 改进：用三个变量接住王冠、次王冠和战绩表
+        king_factor, sub_factor, king_stats = sorter.find_king_factor(
+            df_radar_sorter)
+
+        # 1. 刷新你的个人底仓 list.csv
         df_top_picks = sorter.update_and_sort_list(df_latest, king_factor)
-        
-        # ✨ 核心抓取：从最新的洗牌数据中，提取真实的 T0 截面日期
-        actual_t0 = pd.to_datetime(df_latest['date'].iloc[0]).strftime("%Y-%m-%d")
-        
+
+        # ✨ 新增：2. 输出全市场 ZZ800 的 Top 100 猎物池
+        df_zz800_top100 = sorter.rank_zz800_top100(
+            df_latest, king_factor, sub_factor)
+
+        # 从最新的洗牌数据中，提取真实的 T0 截面日期
+        actual_t0 = pd.to_datetime(
+            df_latest['date'].iloc[0]).strftime("%Y-%m-%d")
+
     except Exception as e:
         print(f"❌ 底仓洗牌失败。原因: {e}")
         exit()
 
     # [步骤 4/4] 每日战报自动归档为 PKL
     print("\n>>> [步骤 4/4] 正在生成并打包今日战报 (Daily Snapshot)...")
-    
-    # ✨ 显式纠错：时序防呆熔断机制
+
     if actual_t0 != today_str:
         print("\n" + "!"*65)
-        print(f"🚨 【时序防呆拦截触发】检测到底层数据时间滞后！")
-        print(f"   > 你的系统日历: {today_str}")
-        print(f"   > 实际底层数据: {actual_t0}")
-        print(f"   (注: 若今天是周末则属正常；若是工作日，说明数据源尚未更新)")
-        print(f"   🛡️ 纠错动作 1：拒绝生成名为 {today_str} 的虚假战报。")
-        print(f"   🛡️ 纠错动作 2：强制将本次结果归档为 Report_{actual_t0}.pkl。")
+        print(f"🚨 【时序防呆拦截触发】检测到底层数据时间滞后！(实际底层数据: {actual_t0})")
         print("!"*65)
 
     try:
         os.makedirs("Daily_Reports", exist_ok=True)
-        
-        # 将我们最关心的核心数据装进一个字典
+
+        # ✨ 数据字典全面扩容，将板块分析和 Top100 全都装进战报
         daily_snapshot = {
-            "date": actual_t0,            # ⚠️ 强行修正为实际数据日期
+            "date": actual_t0,
             "king_factor": king_factor,
-            "king_stats": king_stats,     
+            "sub_factor": sub_factor,         # 新增次强因子
+            "king_stats": king_stats,
             "ols_report": ols_report,
             "drill_report": drill_report,
+            "sector_pivot": sector_pivot,     # 新增板块动量表
+            "sector_rank": sector_rank,       # 新增板块排名变动
             "top_picks": df_top_picks,
-            "radar_data": df_final_radar  
+            "zz800_top100": df_zz800_top100,  # 新增全市场 Top100
+            "radar_data": df_final_radar
         }
-        
-        # ⚠️ 文件名强行由实际数据日期决定
+
         report_file = f"Daily_Reports/Report_{actual_t0}.pkl"
         with open(report_file, 'wb') as f:
             pickle.dump(daily_snapshot, f)
-            
+
         print(f"📦 战报已加密归档至: {report_file}")
     except Exception as e:
         print(f"❌ 战报归档失败。原因: {e}")
@@ -106,6 +115,6 @@ if __name__ == "__main__":
     # ==========================================
     print("\n" + "="*65)
     print(f"✅ 每日流水线全部执行完毕！全流程总耗时: {time.time() - pipeline_start_t:.2f} 秒")
-    # 打印时也提示真实日期
-    print(f"👉 【基于 {actual_t0} 截面】主线风口: 【{king_factor}】 | 请检查 list.csv！")
+    print(f"👉 【截面基准 {actual_t0}】主线风口: 【{king_factor}】 | 辅助风口: 【{sub_factor}】")
+    print(f"📁 请检查生成的个人底仓 (list.csv) 及全市场金股池 (zz800_top100.csv)！")
     print("="*65)

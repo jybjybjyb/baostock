@@ -207,6 +207,68 @@ def drill_down_industry_leaders(df, factor_cols, top_n_ind=3, top_n_stock=3):
     }
 
 
+def analyze_sector_trends(lookback=5, volume_filter_quantile=0.3):
+    """
+    【全新升级】：结合绝对成交额（Amount），自动剔除流动性枯竭的微型板块噪音
+    """
+    print("\n" + "="*65)
+    print(
+        f"📊 【板块轮动透视】分析当日及近 {lookback} 日强弱势板块 (🛡️ 已开启资金量降噪: 剔除后 {volume_filter_quantile*100}% 板块)")
+    print("="*65)
+
+    # 1. 极速读取基础数据 (✨ 新增 amount 列用于计算真实资金体量)
+    all_files = glob.glob(f"{DATA_DIR}/*.parquet")
+    df_all = pd.concat([pd.read_parquet(f, columns=['code', 'date', 'pctChg', 'amount'])
+                       for f in all_files], ignore_index=True)
+    df_all['date'] = pd.to_datetime(df_all['date'])
+
+    # 2. 截取最近 N 天的数据
+    recent_dates = sorted(df_all['date'].unique())[-lookback:]
+    df_recent = df_all[df_all['date'].isin(recent_dates)]
+
+    # 3. 挂载行业元数据
+    df_meta = load_local_metadata()
+    df_recent = pd.merge(df_recent, df_meta, on='code', how='inner')
+
+    # ✨ 4. 核心改造：引入资金容量过滤 (Volume Profile 降噪)
+    t0_date = recent_dates[-1]
+    t1_date = recent_dates[-2]
+
+    df_t0 = df_recent[df_recent['date'] == t0_date]
+    # 计算 T0 各板块的总成交额
+    sector_amount = df_t0.groupby('Industry')['amount'].sum()
+
+    # 设定动态阈值：砍掉成交额垫底的尾部板块
+    threshold = sector_amount.quantile(volume_filter_quantile)
+    valid_sectors = sector_amount[sector_amount >= threshold].index
+
+    print(
+        f"🔪 降噪执行：全市场 {len(sector_amount)} 个板块，已剔除成交额垫底的 {len(sector_amount) - len(valid_sectors)} 个冷门板块。")
+
+    # 仅保留主舞台上的有效板块
+    df_valid = df_recent[df_recent['Industry'].isin(valid_sectors)]
+
+    # 5. 透视表：计算每日各行业的平均涨跌幅
+    pivot_df = df_valid.pivot_table(
+        index='Industry', columns='date', values='pctChg', aggfunc='mean')
+
+    # 6. 分析变动，并挂载真实成交额
+    rank_df = pd.DataFrame({
+        'T0_Rank': pivot_df[t0_date].rank(ascending=False),
+        'T1_Rank': pivot_df[t1_date].rank(ascending=False),
+        'T0_Amount': sector_amount[valid_sectors]  # 挂载绝对资金量
+    })
+    rank_df['Change'] = rank_df['T1_Rank'] - rank_df['T0_Rank']
+
+    # 打印终端战报
+    soaring = rank_df.sort_values(by='Change', ascending=False).head(3)
+    print("\n🚀 【核心主舞台：异动飙升板块】(前排抢筹):")
+    for ind, row in soaring.iterrows():
+        amt_yi = row['T0_Amount'] / 1e8  # 转换为亿元
+        print(
+            f"  > {ind.ljust(8)} : 排名上升 {int(row['Change']):>2} 位 | 资金量: {amt_yi:>6.1f} 亿")
+
+    return pivot_df, rank_df
 
 if __name__ == "__main__":
 

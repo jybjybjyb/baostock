@@ -76,9 +76,13 @@ def get_market_data_and_factors():
     df_latest = df_all[df_all['date'] == t0_date].copy()
 
     return df_radar, df_latest
+
+# 替换原有的 find_king_factor 函数
+
+
 def find_king_factor(df_radar):
-    """运行截面回归，找出当前Beta最高的最强因子 (升级版：返回完整战报)"""
-    print("\n📡 2. 启动雷达扫描，寻找当前市场 [最强因子]...")
+    """运行截面回归，找出当前Beta最高的最强因子与次强因子"""
+    print("\n📡 2. 启动雷达扫描，寻找当前市场 [最强因子] & [次强因子]...")
     df = df_radar.copy()
 
     for c in FACTOR_COLS:
@@ -90,38 +94,73 @@ def find_king_factor(df_radar):
     X = sm.add_constant(df[FACTOR_COLS])
     model = sm.OLS(Y, X).fit()
 
-    # ✨ 核心改进：创建一个列表存储所有因子的战绩
     factor_stats = []
-    best_factor = None
-    max_beta = -float('inf')
-
     for factor in FACTOR_COLS:
         beta = model.params[factor]
         t_val = model.tvalues[factor]
-        print(f"  > {factor.ljust(15)} : Beta = {beta:>6.3f} | T值 = {t_val:>6.2f}")
-        
-        # 将结果存入字典
+        print(
+            f"  > {factor.ljust(15)} : Beta = {beta:>6.3f} | T值 = {t_val:>6.2f}")
         factor_stats.append({
-            '因子名称': factor,
-            'Beta (强度)': round(beta, 4),
-            'T值 (显著性)': round(t_val, 2)
+            '因子名称': factor, 'Beta (强度)': round(beta, 4), 'T值 (显著性)': round(t_val, 2)
         })
 
-        if beta > max_beta and t_val > 1.0:
-            max_beta = beta
-            best_factor = factor
+    # ✨ 核心改进：按 Beta 强度降序排列，提取前两名
+    df_stats = pd.DataFrame(factor_stats).sort_values(
+        by='Beta (强度)', ascending=False)
 
-    if best_factor is None:
-        best_factor = 'Momentum'
-        print(f"⚠️ 未发现显著因子，默认使用: 【{best_factor}】")
-    else:
-        print(f"👑 雷达锁定！当前市场核心因子是: 【{best_factor}】")
+    best_factor = df_stats.iloc[0]['因子名称'] if not df_stats.empty else 'Momentum'
+    sub_factor = df_stats.iloc[1]['因子名称'] if len(df_stats) > 1 else 'Low_Vol'
 
-    # ✨ 核心改进：将战报转为 DataFrame 并按强度排序
-    df_stats = pd.DataFrame(factor_stats).sort_values(by='Beta (强度)', ascending=False)
-    
-    # 返回两个对象：最强因子名称 和 完整战报表
-    return best_factor, df_stats
+    print(f"👑 雷达锁定！当前市场核心最强因子: 【{best_factor}】 | 次强因子: 【{sub_factor}】")
+
+    # 返回三个对象：最强因子、次强因子、完整战报表
+    return best_factor, sub_factor, df_stats
+
+
+# 在文件末尾追加全新的 rank_zz800_top100 函数
+def rank_zz800_top100(df_latest, best_factor, sub_factor):
+    """全市场清洗：基于最强与次强因子构建复合得分，输出中证800前100强"""
+    print(
+        f"\n🌐 4. 正在对全市场 ZZ800 进行重新排序 (权重: 70% {best_factor} + 30% {sub_factor})...")
+    df = df_latest.copy()
+
+    # 1. 市场全量 Z-score 标准化 (必须重新标准化，保证横向可比)
+    for c in FACTOR_COLS:
+        df[c] = np.clip(df[c], df[c].mean() - 3*df[c].std(),
+                        df[c].mean() + 3*df[c].std())
+        df[c] = (df[c] - df[c].mean()) / df[c].std()
+
+    # 2. 构建上帝视角的复合得分 (Composite Score)
+    df['Composite_Score'] = df[best_factor] * 0.7 + df[sub_factor] * 0.3
+
+    # 3. 挂载名称和行业方便阅读
+    import market_radar as radar
+    try:
+        df_meta = radar.load_local_metadata()
+        df = pd.merge(df, df_meta, on='code', how='left')
+    except Exception:
+        df['name'] = '未知'
+        df['Industry'] = '未知'
+
+    # 4. 截取前 100 名最强阿尔法标的
+    df_top100 = df.sort_values(by='Composite_Score', ascending=False).head(100)
+    df_top100.reset_index(drop=True, inplace=True)
+
+    # 5. 落盘归档
+    out_file = "zz800_top100.csv"
+    columns_to_export = ['code', 'name', 'Industry',
+                         'Composite_Score', best_factor, sub_factor]
+    df_top100[columns_to_export].to_csv(
+        out_file, index=False, encoding='utf-8-sig')
+
+    print("=" * 65)
+    print(f"🌟 ZZ800 全市场 Top 100 终极榜单已保存至: {out_file}！(前10名展示)")
+    for i, row in df_top100.head(10).iterrows():
+        print(
+            f"  [Top {i+1:>2}] {row['code']} {row['name']:<6} | 行业: {row['Industry']:<6} | 综合得分: {row['Composite_Score']:>5.2f}")
+    print("=" * 65)
+
+    return df_top100
 
 
 def normalize_code(code_str):
