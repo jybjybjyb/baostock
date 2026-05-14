@@ -12,6 +12,13 @@ from scipy.linalg import fractional_matrix_power
 # import baostock as bs
 import warnings
 warnings.filterwarnings('ignore')
+import pandas as pd
+import numpy as np
+import glob
+
+
+
+
 
 DATA_DIR = "zz800_parquet_data"
 
@@ -269,6 +276,76 @@ def analyze_sector_trends(lookback=5, volume_filter_quantile=0.3):
             f"  > {ind.ljust(8)} : 排名上升 {int(row['Change']):>2} 位 | 资金量: {amt_yi:>6.1f} 亿")
 
     return pivot_df, rank_df
+
+
+def calculate_market_crowdedness(lookback=60):
+    """
+    量化帝国：双波段拥挤度与流动性断层扫描器 (包含 5%/10% 斜率监控)
+    """
+    print("\n" + "="*65)
+    print("🌊 [系统启动] 正在扫描全市场资金拥挤度、宽幅共识与极值黑洞...")
+    print("="*65)
+
+    all_files = glob.glob(f"{DATA_DIR}/*.parquet")
+    df_all = pd.concat([pd.read_parquet(f, columns=['code', 'date', 'amount'])
+                       for f in all_files], ignore_index=True)
+    df_all['date'] = pd.to_datetime(df_all['date'])
+
+    recent_dates = sorted(df_all['date'].unique())[-lookback:]
+    df_recent = df_all[df_all['date'].isin(recent_dates)]
+
+    records = []
+
+    for dt, df_day in df_recent.groupby('date'):
+        df_day = df_day.sort_values(
+            'amount', ascending=False).reset_index(drop=True)
+        df_day = df_day.dropna(subset=['amount'])
+
+        if len(df_day) < 200:
+            continue
+
+        total_amount = df_day['amount'].sum()
+        if total_amount == 0:
+            continue
+
+        # 维度 1: 绝对流动性水位 (亿元)
+        amt_10 = df_day.iloc[9]['amount'] / 1e8
+        amt_50 = df_day.iloc[49]['amount'] / 1e8
+        amt_100 = df_day.iloc[99]['amount'] / 1e8
+        amt_200 = df_day.iloc[199]['amount'] / 1e8
+        median_amount = df_day['amount'].median() / 1e8
+
+        # 维度 2A: 极端拥挤度 (前 5% / 40只)
+        top_5_count = int(len(df_day) * 0.05)
+        top_5_amt = df_day.iloc[:top_5_count]['amount'].sum()
+        top_5_ratio = (top_5_amt / total_amount) * 100
+
+        # 维度 2B: 宽幅赛道共识 (前 10% / 80只)
+        top_10_count = int(len(df_day) * 0.10)
+        top_10_amt = df_day.iloc[:top_10_count]['amount'].sum()
+        top_10_ratio = (top_10_amt / total_amount) * 100
+
+        # 🌟 终极杀器：拥挤度斜率 (Gradient Ratio) -> 衡量前5%龙头对后排的虹吸烈度
+        gradient_ratio = (top_5_amt / top_10_amt) * \
+            100 if top_10_amt > 0 else 0
+
+        records.append({
+            'date': dt,
+            'Top10_Amt': amt_10,
+            'Top50_Amt': amt_50,
+            'Top100_Amt': amt_100,
+            'Top200_Amt': amt_200,
+            'Median_Amt': median_amount,
+            'Top5_Ratio(%)': top_5_ratio,
+            'Top10_Ratio(%)': top_10_ratio,
+            'Gradient_Ratio(%)': gradient_ratio,
+            'T0_Profile': df_day['amount'].values / 1e8 if dt == recent_dates[-1] else None
+        })
+
+    df_crowd = pd.DataFrame(records).set_index('date')
+    print("✅ 双波段拥挤度与黑洞斜率计算完毕。")
+    return df_crowd
+
 
 if __name__ == "__main__":
 

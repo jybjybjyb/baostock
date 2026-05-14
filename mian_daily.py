@@ -45,8 +45,11 @@ if __name__ == "__main__":
         drill_report = radar.drill_down_industry_leaders(
             df_final_radar, radar_factors, top_n_ind=5, top_n_stock=15)
 
-        # ✨ 新增：2. 执行板块轮动时序透视
+        # 2. 执行板块轮动时序透视
         sector_pivot, sector_rank = radar.analyze_sector_trends(lookback=5)
+
+        # ✨ 新增：3. 启动全市场拥挤度与双波段流动性扫描
+        crowdedness_report = radar.calculate_market_crowdedness(lookback=60)
 
     except Exception as e:
         print(f"❌ 雷达扫描失败。原因: {e}")
@@ -87,19 +90,20 @@ if __name__ == "__main__":
     try:
         os.makedirs("Daily_Reports", exist_ok=True)
 
-        # ✨ 数据字典全面扩容，将板块分析和 Top100 全都装进战报
+    # ✨ 数据字典全面扩容，将拥挤度报告装进战报
         daily_snapshot = {
             "date": actual_t0,
             "king_factor": king_factor,
-            "sub_factor": sub_factor,         # 新增次强因子
+            "sub_factor": sub_factor,
             "king_stats": king_stats,
             "ols_report": ols_report,
             "drill_report": drill_report,
-            "sector_pivot": sector_pivot,     # 新增板块动量表
-            "sector_rank": sector_rank,       # 新增板块排名变动
+            "sector_pivot": sector_pivot,
+            "sector_rank": sector_rank,
             "top_picks": df_top_picks,
-            "zz800_top100": df_zz800_top100,  # 新增全市场 Top100
-            "radar_data": df_final_radar
+            "zz800_top100": df_zz800_top100,
+            "radar_data": df_final_radar,
+            "crowdedness_report": crowdedness_report  # <--- 必须确保这行存在
         }
 
         report_file = f"Daily_Reports/Report_{actual_t0}.pkl"
@@ -109,6 +113,7 @@ if __name__ == "__main__":
         print(f"📦 战报已加密归档至: {report_file}")
     except Exception as e:
         print(f"❌ 战报归档失败。原因: {e}")
+
 
     # ==========================================
     # 收尾汇报
